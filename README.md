@@ -1,6 +1,4 @@
 # Korean_translator
-If you type Korean in the input window and press the Enter key, it will be translated into English and the translated sentence will be entered where the mouse cursor is currently located.
-
 This is a program that translates Korean into English in real time. If you press Ctrl + ` keys at the current location, a translation input window will appear, and if you press Enter after entering the content, it will be automatically translated into English.
 
 
