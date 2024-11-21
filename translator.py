@@ -1,93 +1,133 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, scrolledtext
 import keyboard
 import pyperclip
 import urllib.request
 import urllib.parse
 import json
 import threading
-import winreg
-import sys
 import os
-import win32gui
-import win32con
-from tkinter.scrolledtext import ScrolledText
+from PIL import Image, ImageDraw, ImageTk
 import pystray
-from PIL import Image, ImageDraw
+import sv_ttk
 
 class TranslatorApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("한영 번역기")
+        self.root.title("Modern Translator")
         self.root.withdraw()
         self.popup = None
         self.is_translating = False
-        keyboard.add_hotkey('ctrl+`', self.show_popup)
-        self.root.update()
+        self.ctrl_pressed = False
         
-    def translate_text(self, text):
-        text = urllib.parse.quote(text)
-        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=ko&tl=en&dt=t&q={text}"
+        sv_ttk.set_theme("dark")
         
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        req = urllib.request.Request(url, headers=headers)
-        response = urllib.request.urlopen(req)
+        keyboard.on_press_key('ctrl', self.ctrl_down)
+        keyboard.on_release_key('ctrl', self.ctrl_up)
+        keyboard.on_press_key('`', self.handle_hotkey, suppress=True)
         
-        raw_data = response.read().decode('utf-8')
-        data = json.loads(raw_data)
+        self.style = ttk.Style()
+        self.create_custom_styles()
         
-        translated_text = ''
-        for sentence in data[0]:
-            if sentence[0]:
-                translated_text += sentence[0]
-                
-        return translated_text
-        
+    def create_custom_styles(self):
+        self.style.configure("Custom.TFrame", background="#2b2b2b")
+        self.style.configure("Custom.TLabel", background="#2b2b2b", foreground="#ffffff", font=("Segoe UI", 10))
+        self.style.configure("Title.TLabel", background="#2b2b2b", foreground="#ffffff", font=("Segoe UI", 12, "bold"))
+    
+    def ctrl_down(self, _): self.ctrl_pressed = True
+    def ctrl_up(self, _): self.ctrl_pressed = False
+    
+    def handle_hotkey(self, _):
+        if self.ctrl_pressed:
+            if self.popup and tk.Toplevel.winfo_exists(self.popup):
+                self.popup.destroy()
+            self.root.after(100, self.show_popup)
+            
+    def translate_text(self, text: str) -> str:
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=ko&tl=en&dt=t&q={urllib.parse.quote(text)}"
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                return ''.join(sentence[0] for sentence in data[0] if sentence[0])
+        except Exception as e:
+            messagebox.showerror("Error", f"Translation error: {str(e)}")
+            return ""
+
     def show_popup(self):
-        if self.popup is None or not tk.Toplevel.winfo_exists(self.popup):
+        try:
             self.popup = tk.Toplevel(self.root)
-            self.popup.title("입력창")
+            self.popup.title("Translator")
+            self.popup.configure(bg="#2b2b2b")
+            self.popup.attributes('-alpha', 0.95, '-topmost', True)
             
-            screen_width = self.popup.winfo_screenwidth()
-            screen_height = self.popup.winfo_screenheight()
-            x = (screen_width/2) - (400/2)
-            y = (screen_height/2) - (300/2)
-            self.popup.geometry(f'400x300+{int(x)}+{int(y)}')
+            x = (self.popup.winfo_screenwidth() - 500) // 2
+            y = (self.popup.winfo_screenheight() - 400) // 2
+            self.popup.geometry(f'500x400+{x}+{y}')
             
-            self.text_input = ScrolledText(self.popup, height=10)
-            self.text_input.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
+            main_frame = ttk.Frame(self.popup, style="Custom.TFrame", padding="20")
+            main_frame.pack(fill=tk.BOTH, expand=True)
             
-            self.status_label = ttk.Label(self.popup, text="")
-            self.status_label.pack(pady=5)
+            ttk.Label(main_frame, text="Korean to English Translator", style="Title.TLabel").pack(pady=(0, 20))
             
-            self.char_count = tk.Label(self.popup, text="글자 수: 0")
-            self.char_count.pack(pady=5)
+            input_frame = ttk.Frame(main_frame, style="Custom.TFrame")
+            input_frame.pack(fill=tk.BOTH, expand=True)
+            
+            ttk.Label(input_frame, text="Enter Korean text (Press Enter to translate, Shift+Enter for new line):", 
+                     style="Custom.TLabel").pack(anchor="w", pady=(0, 5))
+            
+            self.text_input = scrolledtext.ScrolledText(
+                input_frame, height=12, font=("Segoe UI", 11),
+                bg="#363636", fg="#ffffff", insertbackground="#ffffff"
+            )
+            self.text_input.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+            
+            status_frame = ttk.Frame(main_frame, style="Custom.TFrame")
+            status_frame.pack(fill=tk.X, pady=(10, 0))
+            
+            self.char_count = ttk.Label(status_frame, text="Characters: 0", style="Custom.TLabel")
+            self.char_count.pack(side=tk.LEFT)
             
             self.text_input.bind('<KeyRelease>', self.update_char_count)
-            self.popup.bind('<Return>', self.handle_return)
-            self.popup.bind('<Shift-Return>', lambda e: self.text_input.insert(tk.INSERT, '\n'))
+            self.text_input.bind('<Return>', self.handle_return)
+            self.text_input.bind('<Shift-Return>', self.handle_shift_return)
+            self.popup.bind('<Escape>', lambda e: self.popup.destroy())
             
-            self.text_input.focus()
+            self.popup.protocol("WM_DELETE_WINDOW", self.popup.destroy)
+            self.popup.after(10, self._ensure_focus)
+            
+        except Exception as e:
+            print(f"Error creating popup: {str(e)}")
+    
+    def _ensure_focus(self):
+        try:
+            if self.popup and tk.Toplevel.winfo_exists(self.popup):
+                self.popup.focus_force()
+                self.text_input.focus_set()
+        except Exception as e:
+            print(f"Error setting focus: {str(e)}")
     
     def handle_return(self, event):
-        if not event.state & 0x1:  # Shift key is not pressed
+        if not event.state & 0x1:
             self.handle_translation()
             return 'break'
     
-    def update_char_count(self, event=None):
-        text = self.text_input.get('1.0', tk.END).strip()
-        count = len(text)
-        self.char_count.config(text=f"글자 수: {count}")
+    def handle_shift_return(self, event):
+        current_pos = self.text_input.index(tk.INSERT)
+        self.text_input.insert(current_pos, '\n')
+        return 'break'
     
-    def translation_thread(self, text):
+    def update_char_count(self, _):
+        count = len(self.text_input.get('1.0', tk.END).strip())
+        self.char_count.config(text=f"Characters: {count}")
+    
+    def translation_thread(self, text: str):
         try:
             translated_text = self.translate_text(text)
-            self.status_label.config(text="")
-            pyperclip.copy(translated_text)
-            self.popup.destroy()
-            keyboard.write(translated_text)
-        except Exception as e:
-            messagebox.showerror("오류", f"번역 중 오류가 발생했습니다: {str(e)}")
+            if translated_text:
+                pyperclip.copy(translated_text)
+                if self.popup and tk.Toplevel.winfo_exists(self.popup):
+                    self.popup.destroy()
+                keyboard.press_and_release('ctrl+v')
         finally:
             self.is_translating = False
             
@@ -95,48 +135,31 @@ class TranslatorApp:
         if self.is_translating:
             return
             
-        korean_text = self.text_input.get('1.0', tk.END).strip()
-        if korean_text:
+        text = self.text_input.get('1.0', tk.END).strip()
+        if text:
             self.is_translating = True
-            self.status_label.config(text="번역 중...")
-            thread = threading.Thread(target=self.translation_thread, args=(korean_text,))
-            thread.daemon = True
-            thread.start()
-
-    def run(self):
-        self.root.mainloop()
+            threading.Thread(target=self.translation_thread, args=(text,), daemon=True).start()
 
 def create_tray_icon(app):
-    icon = Image.new('RGB', (64, 64), color='white')
-    dc = ImageDraw.Draw(icon)
-    dc.text((10, 10), "번역", fill='black')
+    icon = Image.new('RGBA', (64, 64), color=(0, 0, 0, 0))
+    draw = ImageDraw.Draw(icon)
+    draw.rectangle([10, 10, 54, 54], fill="#007AFF")
+    draw.text((25, 15), "T", fill="white", font=None, size=24)
     
-    def quit_app(icon, item):
-        icon.stop()
-        os._exit(0)
-    
-    tray_icon = pystray.Icon(
+    return pystray.Icon(
         "translator",
         icon,
-        "한영 번역기",
+        "Modern Translator",
         menu=pystray.Menu(
-            pystray.MenuItem("종료", quit_app)
+            pystray.MenuItem("Exit", lambda: os._exit(0))
         )
     )
-    return tray_icon
 
 def main():
     app = TranslatorApp()
     tray_icon = create_tray_icon(app)
-    
-    def run_tray():
-        tray_icon.run()
-    
-    tray_thread = threading.Thread(target=run_tray)
-    tray_thread.daemon = True
-    tray_thread.start()
-    
-    app.run()
+    threading.Thread(target=tray_icon.run, daemon=True).start()
+    app.root.mainloop()
 
 if __name__ == "__main__":
     main()
